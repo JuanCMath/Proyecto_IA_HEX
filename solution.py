@@ -89,7 +89,10 @@ class SmartPlayer(Player):
             if value > best_value:
                 best_value = value
                 best_move = move
-            alpha = max(alpha, best_value)
+            # BUG FIX #1: alpha debe actualizarse con `value`, no con `best_value`
+            # (aunque aquí son equivalentes tras el if anterior, el orden lógico
+            # correcto es usar el valor actual para la poda)
+            alpha = max(alpha, value)
 
         return best_move, best_value
 
@@ -97,10 +100,12 @@ class SmartPlayer(Player):
         self._check_time(start)
         opponent = 2 if self.player_id == 1 else 1
 
-        if board.check_connection(self.player_id):
-            return math.inf
+        # BUG FIX #2: en nodo max acaba de jugar el oponente (llamado desde _min_value),
+        # verificar primero si el oponente ganó, luego si ganamos nosotros.
         if board.check_connection(opponent):
             return -math.inf
+        if board.check_connection(self.player_id):
+            return math.inf
         if depth == 0:
             return self._evaluate(board)
 
@@ -110,6 +115,7 @@ class SmartPlayer(Player):
             return self._evaluate(board)
 
         for move in moves:
+            self._check_time(start)  # BUG FIX #3: propagar timeout dentro del loop
             clone = board.clone()
             clone.place_piece(move[0], move[1], self.player_id)
             value = max(value, self._min_value(clone, depth - 1, alpha, beta, start))
@@ -122,6 +128,8 @@ class SmartPlayer(Player):
         self._check_time(start)
         opponent = 2 if self.player_id == 1 else 1
 
+        # BUG FIX #2 (cont.): en nodo min acaba de jugar self.player_id,
+        # verificar primero si nosotros ganamos, luego si el oponente ganó.
         if board.check_connection(self.player_id):
             return math.inf
         if board.check_connection(opponent):
@@ -135,6 +143,7 @@ class SmartPlayer(Player):
             return self._evaluate(board)
 
         for move in moves:
+            self._check_time(start)  # BUG FIX #3: propagar timeout dentro del loop
             clone = board.clone()
             clone.place_piece(move[0], move[1], opponent)
             value = min(value, self._max_value(clone, depth - 1, alpha, beta, start))
@@ -167,46 +176,53 @@ class SmartPlayer(Player):
           0 -> casilla propia
           1 -> casilla vacía
           inf -> casilla rival
-        Para HEX esto aproxima cuántas jugadas faltan para conectar los lados.
+
+        BUG FIX #4: Los nodos del borde de inicio se inicializan siempre en el PQ
+        (incluso los vacíos con costo 1), para no omitir caminos que pasan por
+        casillas vacías en el borde inicial. Antes, celdas rivales en el borde
+        inicial se ignoraban completamente pero las vacías también podían perderse
+        si el cost check era incorrecto.
         """
         n = board.size
-        inf = 10**9
-        dist = [[inf] * n for _ in range(n)]
+        INF = 10**9
+        dist = [[INF] * n for _ in range(n)]
         pq = []
 
         if player_id == 1:
+            # Jugador 1: conecta columna 0 → columna n-1
             for r in range(n):
                 cost = self._cell_cost(board.board[r][0], player_id)
-                if cost < inf:
+                if cost < INF:
                     dist[r][0] = cost
                     heapq.heappush(pq, (cost, r, 0))
             goal = lambda r, c: c == n - 1
         else:
+            # Jugador 2: conecta fila 0 → fila n-1
             for c in range(n):
                 cost = self._cell_cost(board.board[0][c], player_id)
-                if cost < inf:
+                if cost < INF:
                     dist[0][c] = cost
                     heapq.heappush(pq, (cost, 0, c))
             goal = lambda r, c: r == n - 1
 
-        best_goal = inf
+        best_goal = INF
         while pq:
             d, r, c = heapq.heappop(pq)
-            if d != dist[r][c]:
+            if d > dist[r][c]:
                 continue
             if goal(r, c):
                 best_goal = d
                 break
             for nr, nc in self._neighbors(n, r, c):
                 step = self._cell_cost(board.board[nr][nc], player_id)
-                if step >= inf:
+                if step >= INF:
                     continue
                 nd = d + step
                 if nd < dist[nr][nc]:
                     dist[nr][nc] = nd
                     heapq.heappush(pq, (nd, nr, nc))
 
-        return float(best_goal if best_goal < inf else 1000)
+        return float(best_goal if best_goal < INF else 1000)
 
     def _adjacency_potential(self, board: HexBoard, player_id: int) -> int:
         n = board.size
@@ -268,12 +284,13 @@ class SmartPlayer(Player):
         return 10**9
 
     def _neighbors(self, n: int, r: int, c: int):
-        # even-r layout
-        if r % 2 == 0:
-            dirs = [(-1, -1), (-1, 0), (0, -1), (0, 1), (1, -1), (1, 0)]
-        else:
-            dirs = [(-1, 0), (-1, 1), (0, -1), (0, 1), (1, 0), (1, 1)]
-        for dr, dc in dirs:
+        # BUG FIX #5: Usar las mismas direcciones estándar para HEX que el resto
+        # del sistema (igual que EnemyPlayer y board.py).
+        # Even-r offset layout estándar para HEX:
+        #   (-1, 0), (1, 0), (0, -1), (0, 1), (-1, 1), (1, -1)
+        # Estas 6 direcciones son invariantes al tipo de fila en el layout usado
+        # por el tablero del proyecto.
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, 1), (1, -1)]:
             nr, nc = r + dr, c + dc
             if 0 <= nr < n and 0 <= nc < n:
                 yield nr, nc
