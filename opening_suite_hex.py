@@ -133,6 +133,7 @@ def run_match_from_opening(
                 "invalid": False,
                 "opening": opening.name,
                 "smart_role": 1 if smart_as_player1 else 2,
+                "move_times_smart": [],
             }
 
     players = {
@@ -147,6 +148,7 @@ def run_match_from_opening(
     # Determina a quién le toca según la cantidad de jugadas ya puestas.
     turn = 1 if len(opening.moves) % 2 == 0 else 2
     time_spent = {"SmartPlayer": 0.0, "EnemyPlayer": 0.0}
+    move_times_smart: list[float] = []   # tiempo de cada jugada de SmartPlayer
     moves_played = 0
 
     if show:
@@ -157,6 +159,8 @@ def run_match_from_opening(
         player = players[turn]
         move, elapsed = timed_play(player, board)
         time_spent[names[turn]] += elapsed
+        if names[turn] == "SmartPlayer":
+            move_times_smart.append(elapsed)
 
         if elapsed > time_limit:
             winner = 2 if turn == 1 else 1
@@ -171,6 +175,7 @@ def run_match_from_opening(
                 "invalid": False,
                 "opening": opening.name,
                 "smart_role": 1 if smart_as_player1 else 2,
+                "move_times_smart": move_times_smart,
             }
 
         if not isinstance(move, tuple) or len(move) != 2:
@@ -186,6 +191,7 @@ def run_match_from_opening(
                 "invalid": True,
                 "opening": opening.name,
                 "smart_role": 1 if smart_as_player1 else 2,
+                "move_times_smart": move_times_smart,
             }
 
         row, col = move
@@ -202,6 +208,7 @@ def run_match_from_opening(
                 "invalid": True,
                 "opening": opening.name,
                 "smart_role": 1 if smart_as_player1 else 2,
+                "move_times_smart": move_times_smart,
             }
 
         moves_played += 1
@@ -221,6 +228,7 @@ def run_match_from_opening(
                 "invalid": False,
                 "opening": opening.name,
                 "smart_role": 1 if smart_as_player1 else 2,
+                "move_times_smart": move_times_smart,
             }
 
         turn = 2 if turn == 1 else 1
@@ -238,6 +246,7 @@ def run_match_from_opening(
         "invalid": False,
         "opening": opening.name,
         "smart_role": 1 if smart_as_player1 else 2,
+        "move_times_smart": move_times_smart,
     }
 
 
@@ -261,12 +270,15 @@ def summarize(results: list[dict]):
     }
 
     per_opening: dict[str, dict[str, int]] = {}
+    all_smart_times: list[float] = []
+
     for r in results:
         out[r["winner_name"]] += 1
         out["timeout"] += int(r["timeout"])
         out["invalid"] += int(r["invalid"])
         out["time_smart"] += r["time_smart"]
         out["time_enemy"] += r["time_enemy"]
+        all_smart_times.extend(r.get("move_times_smart", []))
 
         if r["winner_name"] == "SmartPlayer":
             if r["smart_role"] == 1:
@@ -281,6 +293,15 @@ def summarize(results: list[dict]):
 
         po = per_opening.setdefault(r["opening"], {"SmartPlayer": 0, "EnemyPlayer": 0})
         po[r["winner_name"]] += 1
+
+    # Estadísticas de tiempo por jugada de SmartPlayer
+    TIME_LIMIT = 5.0
+    violations = [t for t in all_smart_times if t > TIME_LIMIT]
+    out["move_count_smart"]    = len(all_smart_times)
+    out["move_max_smart"]      = max(all_smart_times) if all_smart_times else 0.0
+    out["move_avg_smart"]      = sum(all_smart_times) / len(all_smart_times) if all_smart_times else 0.0
+    out["move_violations"]     = len(violations)
+    out["move_times_all"]      = sorted(all_smart_times, reverse=True)[:10]  # top 10 más lentas
 
     return out, per_opening
 
@@ -302,7 +323,7 @@ def main():
     results: list[dict] = []
 
     print(f"Se evaluarán {len(suite)} aperturas fijas.")
-    print("Cada apertura se juega 2 veces: Smart como jugador 1 y Smart como jugador 2.")
+    print("Cada apertura se juega 2 veces: Smart vs Enemy (alternando quién es P1).")
     print(f"Total de partidas: {2 * len(suite)}")
 
     for opening in suite:
@@ -342,6 +363,30 @@ def main():
         print(f"Winrate Enemy:           {100.0 * agg['EnemyPlayer'] / finished:.2f}%")
     print(f"Tiempo total Smart:      {agg['time_smart']:.4f}s")
     print(f"Tiempo total Enemy:      {agg['time_enemy']:.4f}s")
+
+    # ── Tracker de tiempo por jugada ──────────────────────────
+    limit = args.time_limit
+    n_moves  = agg["move_count_smart"]
+    max_t    = agg["move_max_smart"]
+    avg_t    = agg["move_avg_smart"]
+    viols    = agg["move_violations"]
+    top10    = agg["move_times_all"]
+
+    status = "✅ CUMPLE" if viols == 0 else f"❌ VIOLA ({viols} jugada{'s' if viols != 1 else ''})"
+
+    print(f"\n=== Tracker de tiempo por jugada (SmartPlayer) ===")
+    print(f"Límite configurado:      {limit:.1f}s")
+    print(f"Jugadas totales:         {n_moves}")
+    print(f"Tiempo máximo:           {max_t:.4f}s")
+    print(f"Tiempo promedio:         {avg_t:.4f}s")
+    print(f"Violaciones (> {limit:.1f}s):   {viols}")
+    print(f"Estado:                  {status}")
+    if top10:
+        print(f"\nTop 10 jugadas más lentas:")
+        for i, t in enumerate(top10, 1):
+            flag = " ⚠️ VIOLA" if t > limit else ""
+            print(f"  {i:2d}. {t:.4f}s{flag}")
+    # ─────────────────────────────────────────────────────────
 
     print("\n=== Resultado por apertura ===")
     for opening_name, counts in per_opening.items():

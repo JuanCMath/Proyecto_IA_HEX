@@ -1,307 +1,172 @@
 from __future__ import annotations
-
 from player import Player
 from board import HexBoard
-import time
-import math
-import heapq
+import time, math, heapq, random
+
+
+class _Node:
+    def __init__(self, board, move, parent, player_id, moves):
+        self.board      = board
+        self.move       = move
+        self.parent     = parent
+        self.player_id  = player_id
+        self.children   = []
+        self.visits     = 0
+        self.wins       = 0
+        self.rave_v     = {}
+        self.rave_w     = {}
+        self.untried    = list(moves)
+
+    def fully_expanded(self):
+        return not self.untried
+
+    def best_child(self, c=1.4, k=300):
+        log_n = math.log(self.visits)
+        best, best_s = self.children[0], -math.inf
+        for ch in self.children:
+            q    = ch.wins / ch.visits
+            u    = c * math.sqrt(log_n / ch.visits)
+            rv   = self.rave_v.get(ch.move, 0)
+            rq   = self.rave_w.get(ch.move, 0) / rv if rv else 0.0
+            beta = math.sqrt(k / (k + 3.0 * ch.visits))
+            s    = (1 - beta) * q + beta * rq + u
+            if s > best_s:
+                best_s, best = s, ch
+        return best
 
 
 class SmartPlayer(Player):
-    """
-    Jugador para HEX basado en:
-    - chequeos tácticos inmediatos (ganar / bloquear)
-    - minimax con poda alpha-beta
-    - profundización iterativa
-    - heurística de conectividad basada en camino mínimo
+    TIME_LIMIT = 4.5
 
-    No usa estado global persistente entre partidas y no accede a archivos ni red.
-    """
-
-    def __init__(self, player_id: int):
+    def __init__(self, player_id):
         super().__init__(player_id)
-        self.time_limit = 0.85  # margen conservador para evitar descalificación
-        self.max_depth_cap = 3  # profundidad segura para tableros medianos
+        self._ncache = {}
 
-    def play(self, board: HexBoard) -> tuple:
+    def play(self, board):
         start = time.perf_counter()
-        n = board.size
-        opponent = 2 if self.player_id == 1 else 1
-        legal = self._legal_moves(board)
-
+        n     = board.size
+        opp   = 3 - self.player_id
+        legal = self._legal(board)
         if not legal:
             return (0, 0)
-
-        # Apertura: centro o cercano al centro
         if len(legal) == n * n:
-            return min(legal, key=lambda mv: self._center_distance(n, mv[0], mv[1]))
+            return (n // 2, n // 2)
 
-        # 1) Ganar inmediatamente si es posible
-        for move in self._ordered_moves(board, legal, self.player_id):
-            clone = board.clone()
-            clone.place_piece(move[0], move[1], self.player_id)
-            if clone.check_connection(self.player_id):
-                return move
+        cands = self._candidates(board, legal)
 
-        # 2) Bloquear victoria inmediata del oponente
-        opp_wins = []
-        for move in legal:
-            clone = board.clone()
-            clone.place_piece(move[0], move[1], opponent)
-            if clone.check_connection(opponent):
-                opp_wins.append(move)
-        if opp_wins:
-            return min(opp_wins, key=lambda mv: self._center_distance(n, mv[0], mv[1]))
+        for move in cands:
+            b = board.clone(); b.place_piece(*move, self.player_id)
+            if b.check_connection(self.player_id): return move
 
-        # 3) Profundización iterativa con alpha-beta
-        best_move = self._ordered_moves(board, legal, self.player_id)[0]
-        depth = 1
-        while depth <= self.max_depth_cap and not self._time_up(start):
-            try:
-                move, _ = self._search_root(board, depth, start)
-                if move is not None:
-                    best_move = move
-                depth += 1
-            except TimeoutError:
+        for move in cands:
+            b = board.clone(); b.place_piece(*move, opp)
+            if b.check_connection(opp): return move
+
+        return self._mcts(board, cands, start)
+
+    def _mcts(self, board, cands, start):
+        budget = 8000 if board.size <= 7 else 4000 if board.size <= 11 else 2000 if board.size <= 16 else 800
+        root   = _Node(board.clone(), None, None, 3 - self.player_id, cands)
+
+        for _ in range(budget):
+            if time.perf_counter() - start >= self.TIME_LIMIT:
                 break
 
-        return best_move
+            node = root
+            while node.fully_expanded() and node.children:
+                if node.board.check_connection(1) or node.board.check_connection(2): break
+                node = node.best_child()
 
-    # =========================
-    # Búsqueda
-    # =========================
-    def _search_root(self, board: HexBoard, depth: int, start: float):
-        alpha = -math.inf
-        beta = math.inf
-        best_move = None
-        best_value = -math.inf
-        legal = self._ordered_moves(board, self._legal_moves(board), self.player_id)
+            if not node.board.check_connection(1) and not node.board.check_connection(2) and node.untried:
+                nxt   = 3 - node.player_id
+                move  = node.untried.pop(random.randrange(len(node.untried)))
+                nb    = node.board.clone(); nb.place_piece(*move, nxt)
+                child = _Node(nb, move, node, nxt, self._candidates(nb, self._legal(nb)))
+                node.children.append(child)
+                node = child
 
-        for move in legal:
-            self._check_time(start)
-            clone = board.clone()
-            clone.place_piece(move[0], move[1], self.player_id)
+            winner, pmoves = self._simulate(node)
 
-            if clone.check_connection(self.player_id):
-                return move, math.inf
+            cur = node
+            while cur:
+                cur.visits += 1
+                won = winner == cur.player_id
+                if won: cur.wins += 1
+                if cur.parent:
+                    pp = 3 - cur.parent.player_id
+                    for mv, mp in pmoves:
+                        if mp == pp:
+                            cur.parent.rave_v[mv] = cur.parent.rave_v.get(mv, 0) + 1
+                            if won:
+                                cur.parent.rave_w[mv] = cur.parent.rave_w.get(mv, 0) + 1
+                cur = cur.parent
 
-            value = self._min_value(clone, depth - 1, alpha, beta, start)
-            if value > best_value:
-                best_value = value
-                best_move = move
-            # BUG FIX #1: alpha debe actualizarse con `value`, no con `best_value`
-            # (aunque aquí son equivalentes tras el if anterior, el orden lógico
-            # correcto es usar el valor actual para la poda)
-            alpha = max(alpha, value)
+        if not root.children:
+            return cands[0]
+        return max(root.children, key=lambda c: c.visits).move
 
-        return best_move, best_value
+    def _simulate(self, node):
+        b       = node.board.clone()
+        current = 3 - node.player_id
+        played  = []
+        while True:
+            if b.check_connection(1): return 1, played
+            if b.check_connection(2): return 2, played
+            moves = self._candidates(b, self._legal(b))
+            if not moves: return 0, played
+            move = random.choice(moves)
+            b.place_piece(*move, current)
+            played.append((move, current))
+            current = 3 - current
 
-    def _max_value(self, board: HexBoard, depth: int, alpha: float, beta: float, start: float) -> float:
-        self._check_time(start)
-        opponent = 2 if self.player_id == 1 else 1
-
-        # BUG FIX #2: en nodo max acaba de jugar el oponente (llamado desde _min_value),
-        # verificar primero si el oponente ganó, luego si ganamos nosotros.
-        if board.check_connection(opponent):
-            return -math.inf
-        if board.check_connection(self.player_id):
-            return math.inf
-        if depth == 0:
-            return self._evaluate(board)
-
-        value = -math.inf
-        moves = self._ordered_moves(board, self._legal_moves(board), self.player_id)
-        if not moves:
-            return self._evaluate(board)
-
-        for move in moves:
-            self._check_time(start)  # BUG FIX #3: propagar timeout dentro del loop
-            clone = board.clone()
-            clone.place_piece(move[0], move[1], self.player_id)
-            value = max(value, self._min_value(clone, depth - 1, alpha, beta, start))
-            if value >= beta:
-                return value
-            alpha = max(alpha, value)
-        return value
-
-    def _min_value(self, board: HexBoard, depth: int, alpha: float, beta: float, start: float) -> float:
-        self._check_time(start)
-        opponent = 2 if self.player_id == 1 else 1
-
-        # BUG FIX #2 (cont.): en nodo min acaba de jugar self.player_id,
-        # verificar primero si nosotros ganamos, luego si el oponente ganó.
-        if board.check_connection(self.player_id):
-            return math.inf
-        if board.check_connection(opponent):
-            return -math.inf
-        if depth == 0:
-            return self._evaluate(board)
-
-        value = math.inf
-        moves = self._ordered_moves(board, self._legal_moves(board), opponent)
-        if not moves:
-            return self._evaluate(board)
-
-        for move in moves:
-            self._check_time(start)  # BUG FIX #3: propagar timeout dentro del loop
-            clone = board.clone()
-            clone.place_piece(move[0], move[1], opponent)
-            value = min(value, self._max_value(clone, depth - 1, alpha, beta, start))
-            if value <= alpha:
-                return value
-            beta = min(beta, value)
-        return value
-
-    # =========================
-    # Heurística
-    # =========================
-    def _evaluate(self, board: HexBoard) -> float:
-        opponent = 2 if self.player_id == 1 else 1
-
-        my_dist = self._connection_distance(board, self.player_id)
-        opp_dist = self._connection_distance(board, opponent)
-
-        my_potential = self._adjacency_potential(board, self.player_id)
-        opp_potential = self._adjacency_potential(board, opponent)
-        center_bias = self._center_control(board, self.player_id) - self._center_control(board, opponent)
-
-        # Menor distancia es mejor; más potencial también.
-        score = 12.0 * (opp_dist - my_dist) + 2.5 * (my_potential - opp_potential) + 0.7 * center_bias
-        return score
-
-    def _connection_distance(self, board: HexBoard, player_id: int) -> float:
-        """
-        Distancia aproximada al objetivo usando Dijkstra.
-        Costos:
-          0 -> casilla propia
-          1 -> casilla vacía
-          inf -> casilla rival
-
-        BUG FIX #4: Los nodos del borde de inicio se inicializan siempre en el PQ
-        (incluso los vacíos con costo 1), para no omitir caminos que pasan por
-        casillas vacías en el borde inicial. Antes, celdas rivales en el borde
-        inicial se ignoraban completamente pero las vacías también podían perderse
-        si el cost check era incorrecto.
-        """
-        n = board.size
-        INF = 10**9
-        dist = [[INF] * n for _ in range(n)]
-        pq = []
-
+    def _dijkstra(self, board, player_id):
+        n, INF = board.size, 10**9
+        dist = [INF] * (n * n)
+        pq   = []
         if player_id == 1:
-            # Jugador 1: conecta columna 0 → columna n-1
             for r in range(n):
-                cost = self._cell_cost(board.board[r][0], player_id)
-                if cost < INF:
-                    dist[r][0] = cost
-                    heapq.heappush(pq, (cost, r, 0))
+                c = 0 if board.board[r][0] == player_id else 1 if board.board[r][0] == 0 else INF
+                if c < INF: dist[r*n] = c; heapq.heappush(pq, (c, r*n))
             goal = lambda r, c: c == n - 1
         else:
-            # Jugador 2: conecta fila 0 → fila n-1
             for c in range(n):
-                cost = self._cell_cost(board.board[0][c], player_id)
-                if cost < INF:
-                    dist[0][c] = cost
-                    heapq.heappush(pq, (cost, 0, c))
+                v = 0 if board.board[0][c] == player_id else 1 if board.board[0][c] == 0 else INF
+                if v < INF: dist[c] = v; heapq.heappush(pq, (v, c))
             goal = lambda r, c: r == n - 1
-
-        best_goal = INF
         while pq:
-            d, r, c = heapq.heappop(pq)
-            if d > dist[r][c]:
-                continue
-            if goal(r, c):
-                best_goal = d
-                break
+            d, idx = heapq.heappop(pq)
+            if d > dist[idx]: continue
+            r, c = divmod(idx, n)
+            if goal(r, c): return float(d)
             for nr, nc in self._neighbors(n, r, c):
-                step = self._cell_cost(board.board[nr][nc], player_id)
-                if step >= INF:
-                    continue
-                nd = d + step
-                if nd < dist[nr][nc]:
-                    dist[nr][nc] = nd
-                    heapq.heappush(pq, (nd, nr, nc))
-
-        return float(best_goal if best_goal < INF else 1000)
-
-    def _adjacency_potential(self, board: HexBoard, player_id: int) -> int:
-        n = board.size
-        total = 0
-        for r in range(n):
-            for c in range(n):
-                if board.board[r][c] != player_id:
-                    continue
-                for nr, nc in self._neighbors(n, r, c):
-                    if board.board[nr][nc] == player_id:
-                        total += 2
-                    elif board.board[nr][nc] == 0:
-                        total += 1
-        return total
-
-    def _center_control(self, board: HexBoard, player_id: int) -> float:
-        n = board.size
-        center = (n - 1) / 2.0
-        value = 0.0
-        for r in range(n):
-            for c in range(n):
-                if board.board[r][c] == player_id:
-                    value += n - (abs(r - center) + abs(c - center))
-        return value
-
-    # =========================
-    # Ordenación de jugadas
-    # =========================
-    def _ordered_moves(self, board: HexBoard, moves: list[tuple], player_id: int) -> list[tuple]:
-        opponent = 2 if player_id == 1 else 1
-        scored = []
-        for r, c in moves:
-            score = 0
-            for nr, nc in self._neighbors(board.size, r, c):
                 cell = board.board[nr][nc]
-                if cell == player_id:
-                    score += 4
-                elif cell == opponent:
-                    score += 2
-                else:
-                    score += 1
-            score -= self._center_distance(board.size, r, c)
-            scored.append((score, (r, c)))
-        scored.sort(reverse=True, key=lambda x: x[0])
-        return [mv for _, mv in scored]
+                s = 0 if cell == player_id else 1 if cell == 0 else INF
+                if s >= INF: continue
+                nd = d + s
+                if nd < dist[nr*n+nc]: dist[nr*n+nc] = nd; heapq.heappush(pq, (nd, nr*n+nc))
+        return 1000.0
 
-    # =========================
-    # Utilidades
-    # =========================
-    def _legal_moves(self, board: HexBoard) -> list[tuple]:
+    def _candidates(self, board, legal):
+        n, out = board.size, set()
+        for r in range(n):
+            for c in range(n):
+                if board.board[r][c]:
+                    for nr, nc in self._neighbors(n, r, c):
+                        if not board.board[nr][nc]: out.add((nr, nc))
+        return list(out) if out else legal
+
+    def _legal(self, board):
         n = board.size
-        return [(r, c) for r in range(n) for c in range(n) if board.board[r][c] == 0]
+        return [(r, c) for r in range(n) for c in range(n) if not board.board[r][c]]
 
-    def _cell_cost(self, cell_value: int, player_id: int) -> int:
-        if cell_value == player_id:
-            return 0
-        if cell_value == 0:
-            return 1
-        return 10**9
-
-    def _neighbors(self, n: int, r: int, c: int):
-        # BUG FIX #5: Usar las mismas direcciones estándar para HEX que el resto
-        # del sistema (igual que EnemyPlayer y board.py).
-        # Even-r offset layout estándar para HEX:
-        #   (-1, 0), (1, 0), (0, -1), (0, 1), (-1, 1), (1, -1)
-        # Estas 6 direcciones son invariantes al tipo de fila en el layout usado
-        # por el tablero del proyecto.
-        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, 1), (1, -1)]:
-            nr, nc = r + dr, c + dc
-            if 0 <= nr < n and 0 <= nc < n:
-                yield nr, nc
-
-    def _center_distance(self, n: int, r: int, c: int) -> float:
-        center = (n - 1) / 2.0
-        return abs(r - center) + abs(c - center)
-
-    def _time_up(self, start: float) -> bool:
-        return (time.perf_counter() - start) >= self.time_limit
-
-    def _check_time(self, start: float):
-        if self._time_up(start):
-            raise TimeoutError()
+    def _neighbors(self, n, r, c):
+        if n not in self._ncache:
+            cache = []
+            for rr in range(n):
+                for cc in range(n):
+                    cache.append(tuple(
+                        (rr+dr, cc+dc) for dr, dc in [(-1,0),(1,0),(0,-1),(0,1),(-1,1),(1,-1)]
+                        if 0 <= rr+dr < n and 0 <= cc+dc < n
+                    ))
+            self._ncache[n] = tuple(cache)
+        return self._ncache[n][r*n+c]
