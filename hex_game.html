@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HEX — vs SmartPlayer</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #0a0a0f;
+    --surface:  #111118;
+    --border:   #1e1e2e;
+    --p1:       #e84545;
+    --p1-dim:   #5a1a1a;
+    --p1-glow:  rgba(232,69,69,0.35);
+    --p2:       #4a9eff;
+    --p2-dim:   #0e2a4a;
+    --p2-glow:  rgba(74,158,255,0.35);
+    --empty:    #1a1a28;
+    --empty-h:  #22223a;
+    --text:     #e8e8f0;
+    --muted:    #5a5a78;
+    --accent:   #f5c518;
+    --font-head: 'Syne', sans-serif;
+    --font-mono: 'Space Mono', monospace;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-mono);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px 48px;
+    overflow-x: hidden;
+  }
+
+  /* ── scanline overlay ── */
+  body::before {
+    content:'';
+    position:fixed; inset:0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px);
+    pointer-events:none; z-index:9999;
+  }
+
+  header {
+    text-align: center;
+    margin-bottom: 28px;
+    animation: fadeDown .6s ease both;
+  }
+
+  header h1 {
+    font-family: var(--font-head);
+    font-size: clamp(2.2rem, 6vw, 3.8rem);
+    font-weight: 800;
+    letter-spacing: -2px;
+    background: linear-gradient(135deg, var(--p1) 0%, var(--accent) 50%, var(--p2) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    line-height: 1;
+  }
+
+  header p {
+    color: var(--muted);
+    font-size: .72rem;
+    letter-spacing: 3px;
+    margin-top: 6px;
+    text-transform: uppercase;
+  }
+
+  /* ── controls bar ── */
+  .controls {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-bottom: 24px;
+    animation: fadeDown .6s .1s ease both;
+  }
+
+  .controls label {
+    font-size: .68rem;
+    color: var(--muted);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+
+  select, button {
+    font-family: var(--font-mono);
+    font-size: .78rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--surface);
+    color: var(--text);
+    padding: 8px 14px;
+    cursor: pointer;
+    transition: border-color .2s, background .2s;
+    outline: none;
+  }
+
+  select:hover, select:focus { border-color: var(--muted); }
+
+  button.primary {
+    background: var(--p1);
+    border-color: var(--p1);
+    color: #fff;
+    font-weight: 700;
+  }
+  button.primary:hover { filter: brightness(1.15); }
+  button.secondary:hover { border-color: var(--p2); color: var(--p2); }
+
+  /* ── legend ── */
+  .legend {
+    display: flex;
+    gap: 24px;
+    margin-bottom: 20px;
+    animation: fadeDown .6s .15s ease both;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: .68rem;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .legend-dot {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+  }
+
+  .legend-dot.p1 { background: var(--p1); box-shadow: 0 0 8px var(--p1-glow); }
+  .legend-dot.p2 { background: var(--p2); box-shadow: 0 0 8px var(--p2-glow); }
+
+  /* ── status bar ── */
+  .status {
+    font-family: var(--font-head);
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    margin-bottom: 20px;
+    min-height: 28px;
+    text-align: center;
+    animation: fadeDown .6s .2s ease both;
+  }
+
+  .status.p1-turn  { color: var(--p1); }
+  .status.p2-turn  { color: var(--p2); }
+  .status.thinking { color: var(--accent); }
+  .status.win-p1   { color: var(--p1); }
+  .status.win-p2   { color: var(--p2); }
+
+  /* ── hex board ── */
+  .board-wrap {
+    position: relative;
+    animation: fadeUp .7s .25s ease both;
+  }
+
+  .board-svg {
+    display: block;
+    filter: drop-shadow(0 0 40px rgba(74,158,255,0.06));
+  }
+
+  /* hex cells */
+  .hex-cell {
+    cursor: pointer;
+    transition: fill .15s;
+  }
+
+  .hex-cell polygon {
+    stroke: #2a2a40;
+    stroke-width: 1.5;
+    transition: fill .2s, filter .2s;
+  }
+
+  .hex-cell.empty polygon  { fill: var(--empty); }
+  .hex-cell.empty:hover polygon { fill: var(--empty-h); filter: drop-shadow(0 0 6px rgba(255,255,255,0.15)); }
+  .hex-cell.p1 polygon     { fill: var(--p1); filter: drop-shadow(0 0 8px var(--p1-glow)); cursor: default; }
+  .hex-cell.p2 polygon     { fill: var(--p2); filter: drop-shadow(0 0 8px var(--p2-glow)); cursor: default; }
+  .hex-cell.blocked        { cursor: not-allowed; }
+  .hex-cell.blocked polygon { opacity: .5; }
+  .hex-cell.win-path polygon { animation: winPulse 1s ease-in-out infinite alternate; }
+  .hex-cell.p1.win-path polygon { fill: #ff7070; }
+  .hex-cell.p2.win-path polygon { fill: #80c8ff; }
+
+  /* border edges */
+  .edge-top    { stroke: var(--p1); }
+  .edge-bottom { stroke: var(--p1); }
+  .edge-left   { stroke: var(--p2); }
+  .edge-right  { stroke: var(--p2); }
+
+  /* ── move history ── */
+  .history-panel {
+    margin-top: 24px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    width: min(420px, 90vw);
+    animation: fadeUp .7s .3s ease both;
+  }
+
+  .history-panel h3 {
+    font-family: var(--font-head);
+    font-size: .75rem;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+
+  .history-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-height: 80px;
+    overflow-y: auto;
+  }
+
+  .history-list::-webkit-scrollbar { width: 4px; }
+  .history-list::-webkit-scrollbar-track { background: transparent; }
+  .history-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .move-badge {
+    font-size: .65rem;
+    padding: 3px 8px;
+    border-radius: 3px;
+    letter-spacing: .5px;
+  }
+
+  .move-badge.p1 { background: var(--p1-dim); color: var(--p1); }
+  .move-badge.p2 { background: var(--p2-dim); color: var(--p2); }
+
+  /* ── thinking dots ── */
+  .dots::after {
+    content: '';
+    animation: dots 1.2s steps(4, end) infinite;
+  }
+
+  @keyframes dots {
+    0%   { content: ''; }
+    25%  { content: '.'; }
+    50%  { content: '..'; }
+    75%  { content: '...'; }
+    100% { content: ''; }
+  }
+
+  @keyframes winPulse {
+    from { filter: drop-shadow(0 0 6px currentColor) brightness(1); }
+    to   { filter: drop-shadow(0 0 18px currentColor) brightness(1.4); }
+  }
+
+  @keyframes fadeDown {
+    from { opacity:0; transform: translateY(-16px); }
+    to   { opacity:1; transform: translateY(0); }
+  }
+
+  @keyframes fadeUp {
+    from { opacity:0; transform: translateY(16px); }
+    to   { opacity:1; transform: translateY(0); }
+  }
+
+  @keyframes popIn {
+    from { transform: scale(.4); opacity:0; }
+    to   { transform: scale(1);  opacity:1; }
+  }
+
+  .pop { animation: popIn .25s cubic-bezier(.34,1.56,.64,1) both; }
+
+  /* ── API key notice ── */
+  .api-notice {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    padding: 12px 16px;
+    font-size: .72rem;
+    color: var(--muted);
+    max-width: 500px;
+    margin-bottom: 20px;
+    line-height: 1.7;
+    animation: fadeDown .6s .05s ease both;
+  }
+
+  .api-notice strong { color: var(--accent); }
+
+  /* responsive */
+  @media (max-width: 500px) {
+    body { padding: 16px 8px 32px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>HEX</h1>
+  <p>Human vs SmartPlayer AI</p>
+</header>
+
+<div class="api-notice">
+  <strong>Modo simulado:</strong> La IA corre en el navegador con una implementación MCTS en JavaScript
+  (idéntica a tu <code>solution.py</code>). No requiere servidor.
+  Conecta top↔bottom como <span style="color:var(--p1)">Rojo (tú)</span>,
+  left↔right como <span style="color:var(--p2)">Azul (IA)</span>.
+</div>
+
+<div class="controls">
+  <label>Tamaño</label>
+  <select id="size-select">
+    <option value="5">5 × 5</option>
+    <option value="7" selected>7 × 7</option>
+    <option value="9">9 × 9</option>
+    <option value="11">11 × 11</option>
+  </select>
+  <label>Juego como</label>
+  <select id="role-select">
+    <option value="1">Jugador 1 (Rojo, primero)</option>
+    <option value="2">Jugador 2 (Azul, segundo)</option>
+  </select>
+  <button class="primary" onclick="newGame()">Nueva partida</button>
+  <button class="secondary" onclick="undoMove()">Deshacer</button>
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot p1"></div><span>Tú — top → bottom</span></div>
+  <div class="legend-item"><div class="legend-dot p2"></div><span>IA — left → right</span></div>
+</div>
+
+<div class="status" id="status">Presiona Nueva partida para empezar</div>
+
+<div class="board-wrap">
+  <svg class="board-svg" id="board-svg"></svg>
+</div>
+
+<div class="history-panel">
+  <h3>Historial de jugadas</h3>
+  <div class="history-list" id="history-list"></div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════════════
+// HEX BOARD LOGIC  (mirrors board.py)
+// ══════════════════════════════════════════════════════════════
+
+class HexBoard {
+  constructor(size) {
+    this.size = size;
+    this.board = Array.from({length: size}, () => new Array(size).fill(0));
+  }
+
+  clone() {
+    const b = new HexBoard(this.size);
+    b.board = this.board.map(r => [...r]);
+    return b;
+  }
+
+  placePiece(row, col, player) {
+    if (row < 0 || row >= this.size || col < 0 || col >= this.size) return false;
+    if (this.board[row][col] !== 0) return false;
+    this.board[row][col] = player;
+    return true;
+  }
+
+  // Player 1: connects top row (row=0) to bottom row (row=n-1)
+  // Player 2: connects left col (col=0) to right col (col=n-1)
+  checkConnection(player) {
+    const n = this.size;
+    const visited = Array.from({length: n}, () => new Uint8Array(n));
+    const queue = [];
+
+    if (player === 1) {
+      for (let c = 0; c < n; c++)
+        if (this.board[0][c] === 1) { queue.push([0, c]); visited[0][c] = 1; }
+    } else {
+      for (let r = 0; r < n; r++)
+        if (this.board[r][0] === 2) { queue.push([r, 0]); visited[r][0] = 1; }
+    }
+
+    const dirs = [[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0]];
+    while (queue.length) {
+      const [r, c] = queue.shift();
+      if (player === 1 && r === n-1) return true;
+      if (player === 2 && c === n-1) return true;
+      for (const [dr, dc] of dirs) {
+        const nr = r+dr, nc = c+dc;
+        if (nr>=0 && nr<n && nc>=0 && nc<n && !visited[nr][nc] && this.board[nr][nc] === player) {
+          visited[nr][nc] = 1;
+          queue.push([nr, nc]);
+        }
+      }
+    }
+    return false;
+  }
+
+  // Returns cells in the winning path (for highlight)
+  winPath(player) {
+    const n = this.size;
+    const visited = Array.from({length: n}, () => new Uint8Array(n));
+    const parent  = Array.from({length: n}, () => Array(n).fill(null));
+    const queue   = [];
+
+    if (player === 1) {
+      for (let c = 0; c < n; c++)
+        if (this.board[0][c] === 1) { queue.push([0,c]); visited[0][c] = 1; }
+    } else {
+      for (let r = 0; r < n; r++)
+        if (this.board[r][0] === 2) { queue.push([r,0]); visited[r][0] = 1; }
+    }
+
+    const dirs = [[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0]];
+    let endCell = null;
+    outer: while (queue.length) {
+      const [r,c] = queue.shift();
+      if ((player===1 && r===n-1) || (player===2 && c===n-1)) { endCell=[r,c]; break outer; }
+      for (const [dr,dc] of dirs) {
+        const nr=r+dr, nc=c+dc;
+        if (nr>=0&&nr<n&&nc>=0&&nc<n&&!visited[nr][nc]&&this.board[nr][nc]===player) {
+          visited[nr][nc]=1; parent[nr][nc]=[r,c]; queue.push([nr,nc]);
+        }
+      }
+    }
+    if (!endCell) return [];
+    const path = [];
+    let cur = endCell;
+    while (cur) { path.push(cur); cur = parent[cur[0]][cur[1]]; }
+    return path;
+  }
+
+  isFull() {
+    return this.board.every(row => row.every(c => c !== 0));
+  }
+
+  legalMoves() {
+    const moves = [];
+    for (let r = 0; r < this.size; r++)
+      for (let c = 0; c < this.size; c++)
+        if (this.board[r][c] === 0) moves.push([r,c]);
+    return moves;
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// MCTS (mirrors solution.py)
+// ══════════════════════════════════════════════════════════════
+
+const UCB_C = 1.4;
+const TIME_LIMIT_MS = 3000;
+
+class MCTSNode {
+  constructor(move, player, untried) {
+    this.move     = move;
+    this.player   = player;
+    this.wins     = 0;
+    this.visits   = 0;
+    this.children = [];
+    this.untried  = untried;
+    this.parent   = null;
+  }
+
+  ucb1(parentVisits) {
+    if (this.visits === 0) return Infinity;
+    return this.wins/this.visits + UCB_C * Math.sqrt(Math.log(parentVisits)/this.visits);
+  }
+
+  bestChild() {
+    return this.children.reduce((a,b) => b.ucb1(this.visits) > a.ucb1(this.visits) ? b : a);
+  }
+
+  mostVisited() {
+    return this.children.reduce((a,b) => b.visits > a.visits ? b : a);
+  }
+}
+
+function opponent(p) { return p === 1 ? 2 : 1; }
+
+function shuffle(arr) {
+  for (let i = arr.length-1; i > 0; i--) {
+    const j = Math.floor(Math.random()*(i+1));
+    [arr[i],arr[j]] = [arr[j],arr[i]];
+  }
+  return arr;
+}
+
+function rollout(board, turn) {
+  const sim   = board.clone();
+  let simTurn = turn;
+  const moves = shuffle(sim.legalMoves());
+  let idx = 0;
+  while (idx < moves.length) {
+    const [r,c] = moves[idx];
+    sim.placePiece(r, c, simTurn);
+    if (sim.checkConnection(simTurn)) return simTurn;
+    simTurn = opponent(simTurn);
+    idx++;
+  }
+  return simTurn;
+}
+
+async function mctsMove(board, playerId) {
+  const legal = board.legalMoves();
+  if (legal.length === 1) return legal[0];
+
+  // root.player = the player whose turn it is at root (has NOT moved yet)
+  const root = new MCTSNode(null, playerId, shuffle([...legal]));
+  const deadline = performance.now() + TIME_LIMIT_MS;
+
+  while (performance.now() < deadline) {
+    for (let batch = 0; batch < 50 && performance.now() < deadline; batch++) {
+      let node = root;
+      const b  = board.clone();
+      // 'turn' = who is about to move at the current node
+      let turn = playerId;
+
+      // ── Selection: descend while node is fully expanded ──
+      while (!node.untried.length && node.children.length) {
+        node = node.bestChild();
+        // node.player is who just moved to reach this node
+        b.placePiece(node.move[0], node.move[1], node.player);
+        turn = opponent(node.player);
+      }
+
+      // ── Expansion: try one untried move ──
+      let rolloutTurn = turn;
+      if (node.untried.length) {
+        const idx  = Math.floor(Math.random() * node.untried.length);
+        const move = node.untried.splice(idx, 1)[0];
+        b.placePiece(move[0], move[1], turn);
+        // child.player = who just moved (= turn)
+        const child = new MCTSNode(move, turn, shuffle(b.legalMoves()));
+        child.parent = node;
+        node.children.push(child);
+        node = child;
+        rolloutTurn = opponent(turn); // next player to move in rollout
+      }
+
+      // ── Rollout from current board state ──
+      const winner = rollout(b, rolloutTurn);
+
+      // ── Backprop: credit wins to the node whose player won ──
+      let cur = node;
+      while (cur) {
+        cur.visits++;
+        if (cur.player === winner) cur.wins++;
+        cur = cur.parent;
+      }
+    }
+    await new Promise(r => setTimeout(r, 0));
+  }
+
+  return root.mostVisited().move;
+}
+
+// ══════════════════════════════════════════════════════════════
+// SVG HEX GRID RENDERER
+// ══════════════════════════════════════════════════════════════
+
+const HEX_R  = 28; // outer radius
+const HEX_H  = HEX_R * Math.sqrt(3);
+const HEX_W  = HEX_R * 2;
+const PAD    = 48;
+
+function hexCorners(cx, cy, r) {
+  return Array.from({length: 6}, (_, i) => {
+    const a = Math.PI/180 * (60*i - 30);
+    return `${cx + r*Math.cos(a)},${cy + r*Math.sin(a)}`;
+  }).join(' ');
+}
+
+function cellCenter(row, col) {
+  const x = PAD + col * HEX_W * 0.75 + row * HEX_W * 0.375;
+  const y = PAD + row * HEX_H * 0.5   + col * 0;
+  // correct offset for hex grid
+  const cx = PAD + col * (HEX_W * 0.75) + row * (HEX_W * 0.375);
+  const cy = PAD + row * (HEX_H) * 0.866 + col * 0;
+  return [cx, cy];
+}
+
+// ── recompute with proper axial offset ──
+function hexCenter(row, col) {
+  const cx = PAD + col * HEX_R * 1.5 + row * HEX_R * 0.75;
+  const cy = PAD + row * HEX_H       + col * HEX_H * 0.5;
+  return [cx, cy];
+}
+
+function renderBoard() {
+  const svg = document.getElementById('board-svg');
+  const n   = gameState.size;
+
+  // Compute SVG dimensions
+  const [lastCx, lastCy] = hexCenter(n-1, n-1);
+  const W = lastCx + HEX_R + PAD;
+  const H = lastCy + HEX_H/2 + PAD;
+  svg.setAttribute('width',  W);
+  svg.setAttribute('height', H);
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+  svg.innerHTML = '';
+
+  // ── border edge lines ──
+  const edgeSvg = document.createElementNS('http://www.w3.org/2000/svg','g');
+
+  function edgeLine(r1,c1,r2,c2,cls) {
+    const [x1,y1] = hexCenter(r1,c1);
+    const [x2,y2] = hexCenter(r2,c2);
+    const l = document.createElementNS('http://www.w3.org/2000/svg','line');
+    l.setAttribute('x1',x1); l.setAttribute('y1',y1);
+    l.setAttribute('x2',x2); l.setAttribute('y2',y2);
+    l.setAttribute('stroke-width','4');
+    l.setAttribute('stroke-linecap','round');
+    l.setAttribute('class', cls);
+    l.setAttribute('opacity','.6');
+    edgeSvg.appendChild(l);
+  }
+
+  // top & bottom edges = player 1 (red)
+  for (let c = 0; c < n-1; c++) {
+    edgeLine(0,c,  0,c+1,  'edge-top');
+    edgeLine(n-1,c,n-1,c+1,'edge-bottom');
+  }
+  // left & right edges = player 2 (blue)
+  for (let r = 0; r < n-1; r++) {
+    edgeLine(r,0,  r+1,0,  'edge-left');
+    edgeLine(r,n-1,r+1,n-1,'edge-right');
+  }
+  svg.appendChild(edgeSvg);
+
+  // ── cells ──
+  const winCells = new Set();
+  if (gameState.winner) {
+    const path = gameState.board.winPath(gameState.winner);
+    path.forEach(([r,c]) => winCells.add(`${r},${c}`));
+  }
+
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      const [cx,cy] = hexCenter(r,c);
+      const val     = gameState.board.board[r][c];
+      const inWin   = winCells.has(`${r},${c}`);
+
+      const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+      let cls = 'hex-cell ';
+      if (val === 0) cls += 'empty';
+      else if (val === 1) cls += 'p1';
+      else cls += 'p2';
+      if (inWin) cls += ' win-path';
+      if (gameState.winner || gameState.thinking || val !== 0) cls += ' blocked';
+      g.setAttribute('class', cls);
+
+      const poly = document.createElementNS('http://www.w3.org/2000/svg','polygon');
+      poly.setAttribute('points', hexCorners(cx, cy, HEX_R - 1.5));
+      g.appendChild(poly);
+
+      // coord label
+      const txt = document.createElementNS('http://www.w3.org/2000/svg','text');
+      txt.setAttribute('x', cx);
+      txt.setAttribute('y', cy + 1);
+      txt.setAttribute('text-anchor','middle');
+      txt.setAttribute('dominant-baseline','central');
+      txt.setAttribute('font-size','8');
+      txt.setAttribute('font-family','Space Mono, monospace');
+      txt.setAttribute('fill', val===0 ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.7)');
+      txt.setAttribute('pointer-events','none');
+      txt.textContent = `${r},${c}`;
+      g.appendChild(txt);
+
+      if (val === 0 && !gameState.winner && !gameState.thinking) {
+        g.addEventListener('click', () => humanMove(r, c));
+      }
+
+      svg.appendChild(g);
+    }
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// GAME STATE & LOGIC
+// ══════════════════════════════════════════════════════════════
+
+let gameState = {
+  size: 7,
+  board: null,
+  humanPlayer: 1,
+  currentTurn: 1,
+  winner: null,
+  thinking: false,
+  history: [],  // [{player, row, col}]
+};
+
+function setStatus(msg, cls='') {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = 'status ' + cls;
+}
+
+function setStatusThinking() {
+  const el = document.getElementById('status');
+  el.innerHTML = 'IA pensando<span class="dots"></span>';
+  el.className = 'status thinking';
+}
+
+function updateHistory() {
+  const list = document.getElementById('history-list');
+  list.innerHTML = '';
+  gameState.history.forEach((m, i) => {
+    const b = document.createElement('div');
+    b.className = `move-badge p${m.player}`;
+    b.textContent = `${i+1}. P${m.player} (${m.row},${m.col})`;
+    list.appendChild(b);
+  });
+  list.scrollTop = list.scrollHeight;
+}
+
+function newGame() {
+  const size = parseInt(document.getElementById('size-select').value);
+  const role = parseInt(document.getElementById('role-select').value);
+
+  gameState = {
+    size,
+    board: new HexBoard(size),
+    humanPlayer: role,
+    currentTurn: 1,
+    winner: null,
+    thinking: false,
+    history: [],
+  };
+
+  renderBoard();
+  updateHistory();
+
+  if (role === 1) {
+    setStatus('Tu turno — coloca en el tablero', 'p1-turn');
+  } else {
+    setStatus('Empieza la IA', 'p2-turn');
+    setTimeout(() => aiMove(), 300);
+  }
+}
+
+async function humanMove(row, col) {
+  if (gameState.winner || gameState.thinking) return;
+  if (gameState.currentTurn !== gameState.humanPlayer) return;
+  if (gameState.board.board[row][col] !== 0) return;
+
+  gameState.board.placePiece(row, col, gameState.humanPlayer);
+  gameState.history.push({player: gameState.humanPlayer, row, col});
+  renderBoard();
+  updateHistory();
+
+  if (gameState.board.checkConnection(gameState.humanPlayer)) {
+    gameState.winner = gameState.humanPlayer;
+    renderBoard();
+    setStatus('¡Ganaste! 🎉', 'win-p1');
+    return;
+  }
+
+  gameState.currentTurn = opponent(gameState.humanPlayer);
+  setTimeout(() => aiMove(), 150);
+}
+
+async function aiMove() {
+  if (gameState.winner) return;
+  const aiPlayer = opponent(gameState.humanPlayer);
+
+  gameState.thinking = true;
+  setStatusThinking();
+  renderBoard();
+
+  await new Promise(r => setTimeout(r, 0));
+
+  const [row, col] = await mctsMove(gameState.board, aiPlayer);
+
+  gameState.board.placePiece(row, col, aiPlayer);
+  gameState.history.push({player: aiPlayer, row, col});
+  gameState.thinking = false;
+
+  renderBoard();
+  updateHistory();
+
+  if (gameState.board.checkConnection(aiPlayer)) {
+    gameState.winner = aiPlayer;
+    renderBoard();
+    setStatus('La IA ganó — ¡inténtalo de nuevo!', 'win-p2');
+    return;
+  }
+
+  gameState.currentTurn = gameState.humanPlayer;
+  setStatus(
+    gameState.humanPlayer === 1 ? 'Tu turno (Rojo)' : 'Tu turno (Azul)',
+    gameState.humanPlayer === 1 ? 'p1-turn' : 'p2-turn'
+  );
+}
+
+function undoMove() {
+  if (gameState.thinking || gameState.winner) return;
+  // Undo 2 moves (yours + AI's) so it's your turn again
+  const movesToUndo = gameState.history.length >= 2 ? 2 : gameState.history.length;
+  if (!movesToUndo) return;
+
+  for (let i = 0; i < movesToUndo; i++) {
+    const last = gameState.history.pop();
+    if (last) gameState.board.board[last.row][last.col] = 0;
+  }
+
+  gameState.winner = null;
+  gameState.currentTurn = gameState.humanPlayer;
+  renderBoard();
+  updateHistory();
+  setStatus(
+    gameState.humanPlayer === 1 ? 'Tu turno (Rojo)' : 'Tu turno (Azul)',
+    gameState.humanPlayer === 1 ? 'p1-turn' : 'p2-turn'
+  );
+}
+
+// Start with a fresh game on load
+newGame();
+</script>
+</body>
+</html>
